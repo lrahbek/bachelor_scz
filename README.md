@@ -1,2 +1,2 @@
-# bachelor_scz
-Analysis and appendix for bachelors project
+# Supplementary materials for bachelor project
+
