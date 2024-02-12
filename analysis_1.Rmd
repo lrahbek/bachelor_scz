@@ -41,6 +41,8 @@ jac_wt <- jac #with c/s indication
 
 jac[,3:6][jac[,3:6] == 2] <- 1
 ```
+
+
 # Manual overlap analysis 
 ## 1. Instrument overlap based on symptom categeroies 
 ### 1.1 DSM-5 and ICD-11 coverage of each other 
@@ -379,8 +381,6 @@ write_csv(BC_eval_df, "bc_eval_df.csv")
 
 writeLines(items$item, "items.txt")
 writeLines(items$CODE, "code.txt")
-writeLines(items$SCALE, "scale.txt")
-writeLines(items$NAME), "name.txt")
 ```
 
 
@@ -554,19 +554,10 @@ lm3 <- lm(cos_m3 ~ bc*WA, data = cosu)
 summary(lm1)
 summary(lm2)
 summary(lm3)
-emmeans(lm2, list(pairwise ~ WA*bc),adjust = 'bonferroni')
-emmip(lm2, WA~bc, CIs = T)
-
-
-
-lm2c <- lm(cos_m2 ~ nos_cat*m2_bc_g, data = cosu[cosu$nos_cat_WA == "within",])
-summary(lm2c)
-emmeans(lm2c, list(pairwise ~ nos_cat),adjust = 'bonferroni')
-emmip(lm2c, nos_cat ~ m2_bc_g, CIs = T)
 ```
 
-## 5. Model 2: instrument overlap 
-### 5.1 df with model 2
+## 5. Investigating the instrument overlap based on model 2's cosine scores 
+### 5.1 Data frame with model 2
 ```{r}
 cosu_m2 <- cosu[c(1,2,4,11,9,6:8)]
 
@@ -587,51 +578,25 @@ cosu_m2$ins <- ifelse((cosu_m2$item1_scale %in% c("DSM-5", "ICD-11")) &
 cosu_m2$scale_c <- str_c(cosu_m2$item1_scale, cosu_m2$item2_scale, sep = "-")
 ```
 
-### 5.2 count, similar and disimilar pairs 
+### 5.2 Count similar and disimilar pairs 
 ```{r}
 length(cosu_m2$m2_bc_g[cosu_m2$m2_bc_g ==1])
 length(cosu_m2$m2_bc_g[cosu_m2$m2_bc_g ==0])
 length(cosu_m2$bc[cosu_m2$bc ==1])
 length(cosu_m2$bc[cosu_m2$bc ==0])
-
-
 length(cosu_m2$WA[cosu_m2$WA =="within"])
 length(cosu_m2$WA[cosu_m2$WA =="across"])
-
 ```
 
-```{r}
-cosu_m2 <- merge(cosu_m2, nos_cat[2:3], by.x = "code2", by.y = "ITEMS")
-cosu_m2 <- merge(cosu_m2, nos_cat[2:3], by.x = "code1", by.y = "ITEMS")
-
-
-cosu_m2$nos_cat <- ifelse(cosu_m2$NOS_CAT.x == cosu_m2$NOS_CAT.y, cosu_m2$NOS_CAT.x, 
-       str_c(cosu_m2$NOS_CAT.x, cosu_m2$NOS_CAT.y, sep = " - "))
-cosu_m2 <- cosu_m2[-c(13:14)]
-
-for (row in 1:nrow(cosu_m2)){
-  if (grepl(" - ", cosu_m2$nos_cat[row])){
-    cosu_m2$nos_cat[row] <- str_c(str_sort(unlist(strsplit(cosu_m2$nos_cat[row], 
-                                                           split = " - "))), 
-                                  collapse = " - ")
-  }
-  else (cosu_m2$nos_cat[row] <- cosu_m2$nos_cat[row])
-}
-
-cosu_m2$nos_cat_WA <- ifelse(grepl(" - ", cosu_m2$nos_cat), "across", "within")
-```
-
-
-
-### 5.3 instrument overlap 
-#### 5.3.1 Matrix with cosine scores from model 2, NA in all cells below threhold 
+### 5.3 Matrix with cos scores, set scores below threhold as 0/NA
 ```{r}
 m2_mat <- as.matrix(cossco2)
 m2_mat[m2_mat < metrics$G_means_thr[2]] <- NA
 ```
 
 
-#### 5.3.2 PANSS overlap with other instruments 
+### 5.4 Summarising instrument overlap: overall mean of similar items across instruments 
+#### 5.4.1 PANSS overlap with other instruments 
 ```{r}
 # items in PANSS has a mean cosine score with similar items in: 
 ## SANS/SAPS of: 
@@ -665,7 +630,7 @@ p_ss_not <- sum(rowSums(is.na(m2_mat[60:89,90:94]))==5) #3; P7, G4, N5
 sum(rowSums(is.na(m2_mat[60:89,95:101]))==7) #0
 
 ```
-#### 5.3.3 SANS/SAPS overlap with other instruments 
+#### 5.4.2 SANS/SAPS overlap with other instruments 
 ```{r}
 # items in SANS/SAPS has a mean cosine score with similar items in: 
 ## PANSS of: 
@@ -699,7 +664,7 @@ ss_d_not <- sum(rowSums(is.na(m2_mat[1:59,90:94]))==5) #15; SS11, SS13, SS14, SS
 ss_i_not <- sum(rowSums(is.na(m2_mat[1:59,95:101]))==7) #13; SS11, SS13, SS14, SS16, SS19, SS21, SS22, SS25, SS29, SS31, SS56, SS67, SS68
 
 ```
-#### 5.3.4 DSM-5 overlap with other instruments 
+#### 5.4.3 DSM-5 overlap with other instruments 
 ```{r}
 # items in DSM-5 has a mean cosine score with similar items in: 
 ## PANSS of: 
@@ -733,7 +698,7 @@ sum(rowSums(is.na(m2_mat[90:94,1:59]))==59) #0
 sum(rowSums(is.na(m2_mat[90:94,95:101]))==7) #0
 
 ```
-#### 5.3.5 ICD-11 overlap with other instruments 
+#### 5.4.4 ICD-11 overlap with other instruments 
 ```{r}
 # items in ICD-11 has a mean cosine score with similar items in: 
 ## PANSS of: 
@@ -770,9 +735,10 @@ sum(rowSums(is.na(m2_mat[95:101,90:94]))==5) #0
 
 
 
-### item rep 
+
+### 5.5 Summarising overlap: mean of maximum cosine scores per item in each instrument
+#### 5.5.1 Subset matrix, keep only maximum cosine score for each item in each instrument 
 ```{r}
-#empty matrix 
 m2_mat_m <- m2_mat
 m2_mat[is.na(m2_mat)] <- 0
 m2_mat_m[] <- 0
@@ -795,7 +761,10 @@ rowSums(m2_mat_m>0)
 diag(m2_mat_m) <- NA
 m2_mat_m[m2_mat_m == 0] <- NA
 m2_df_m <- cor_gather(m2_mat_m)
+```
 
+#### 5.5.2 Data frame with each item and the item that rep it best in each instrument 
+```{r}
 #to incl all codes in df
 ext <- merge(items[c(3:4)], nos_cat, by.x = "CODE", by.y = "ITEMS")
 ext <- ext %>% slice(rep(1:n(), each = 3))
@@ -823,24 +792,22 @@ m2_df_m <- merge(m2_df_m, BC_eval_df2[c(1,2,4)], by.x = c("items", "rep_by"), by
 
 m2_df_m <- m2_df_m[c(4,9,5,3, 7,6,8, 10,1,2)]
 m2_df_m$cos[is.na(m2_df_m$cos)] <- 0
+```
 
+#### 5.5.3 Mean of the maximum cosine scores for each instrument 
+```{r}
 m2_df_m %>% 
   summarise(mean(cos), sd(cos), .by = c(item_scale, rep_in)) 
 m2_df_m%>% 
   summarise(mean(cos), sd(cos), .by = item_scale)
-
-table(m2_df_m$rep_in[m2_df_m$cos == 0], m2_df_m$items[m2_df_m$cos == 0])
-
-(m2_df_m$items[m2_df_m$cos == 0])
-
-table(m2_df_m$rep_in, m2_df_m$item_scale, m2_df_m$bc_overlap)
-
-13/19*100
-
-24/
 ```
 
 
+### 5.5.4 Items not represented in 1 or more of the instruments 
+```{r}
+table(m2_df_m$rep_in[m2_df_m$cos == 0], m2_df_m$items[m2_df_m$cos == 0])
+unique(m2_df_m$items[m2_df_m$cos == 0])
 
-
+write.csv(m2_df_m, "max_rep_m2.csv")
+```
 
