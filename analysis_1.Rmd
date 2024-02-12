@@ -803,11 +803,72 @@ m2_df_m%>%
 ```
 
 
-### 5.5.4 Items not represented in 1 or more of the instruments 
+#### 5.5.4 Items not represented in 1 or more of the instruments 
 ```{r}
 table(m2_df_m$rep_in[m2_df_m$cos == 0], m2_df_m$items[m2_df_m$cos == 0])
 unique(m2_df_m$items[m2_df_m$cos == 0])
 
 write.csv(m2_df_m, "max_rep_m2.csv")
+```
+
+
+
+### 5.6 Summarising overlap: st nosology categories 
+#### 5.6.1 Nosology overlap
+```{r}
+m2_mat_nos1 <- m2_mat[90:94, 95:101]
+#dsm -5
+max(m2_mat_nos1[1,]) #A1 delusions, max: 0.8381101 A delusions 
+max(m2_mat_nos1[2,]) #A2 hallucinations, max: 0.7955619 B hallucinations 
+max(m2_mat_nos1[3,]) #A3 dis. thinking, max: 0.834967 C dis. think 
+max(m2_mat_nos1[4,]) #A4 dis. behav, max: 0.7264351 G psych. mot. dis 
+max(m2_mat_nos1[5,]) #A5 neg. symp, max: 0.8667213 E nega symp  
+
+#icd-11
+max(m2_mat_nos1[,1]) #A delusions, max: 0.8381101 A1 delusions 
+max(m2_mat_nos1[,2]) #B hallucinations, max: 0.7955619 A2 hallucinations 
+max(m2_mat_nos1[,3]) #C dis. thinking, max: 0.834967 A3 dis. think 
+max(m2_mat_nos1[,4]) #D exp. of influ, max: 0.5814161 A1 delusions
+max(m2_mat_nos1[,5]) #E neg. symp, max: 0.8667213 A5 nega symp  
+max(m2_mat_nos1[,6]) #F catatoni, max: 0.5831511 A4 dis. behav 
+max(m2_mat_nos1[,7]) #G psych mot. dist, max: 0.7264351 A4 dis. behav 
+```
+
+#### 5.6.2 Scales by nosoogy category 
+```{r}
+m2_mat_d <- rbind(m2_mat[90:94, 1:89], c(rep(0, 89))) #6th row for items not rep in dsm-5
+m2_mat_d[6, ] <- ifelse(colSums(m2_mat_d, na.rm = T) == 0,1,  0) #stand in overlap score for items not represented in dsm-5
+row.names(m2_mat_d)[6] <- c("not")
+
+m2_mat_i <- rbind(m2_mat[95:101, 1:89], c(rep(0, 89))) #8th row for items not rep in icd.11
+m2_mat_i[8, ] <- ifelse(colSums(m2_mat_i, na.rm = T) == 0,1,  0) #stand in overlap score for items not represented in icd-11
+row.names(m2_mat_i)[8] <- c("not")
+
+#all cos score of 0 to NA
+m2_mat_d[m2_mat_d == 0] <- NA
+m2_mat_i[m2_mat_i == 0] <- NA
+
+#df with one row per item each time it is rep by an item in the nos
+m2_df_d <- merge(cor_gather(m2_mat_d), rbind(nos_cat[90:94,2:3], c("not", "not represented in nos")), by.x = "var1", by.y = "ITEMS")
+
+m2_df_i <- merge(cor_gather(m2_mat_i), rbind(nos_cat[95:101,2:3], c("not", "not represented in nos")), by.x = "var1", by.y = "ITEMS")
+
+#keep only one row per item in scales; highest cosine score 
+m2_df_d <- m2_df_d %>% group_by(var2) %>% slice(which.max(cor)) 
+m2_df_i <- m2_df_i %>% group_by(var2) %>% slice(which.max(cor)) 
+
+#set colnames
+colnames(m2_df_d) <- c("dsm_item", "sc_item", "dsm_cos", "dsm_cat")
+colnames(m2_df_i) <- c("icd_item", "sc_item", "icd_cos", "icd_cat")
+
+#merge dfs 
+m2_df_nos <- merge(m2_df_d, m2_df_i)
+m2_df_nos <- merge(m2_df_nos, nos_cat[1:89,1:3], by.x = "sc_item", by.y = "ITEMS")
+
+table(m2_df_nos[1:30,c(7)])/30*100
+table(m2_df_nos[1:30,c(4)])/30*100
+
+table(m2_df_nos[31:89,c(7)])/59*100
+table(m2_df_nos[31:89,c(4)])/59*100
 ```
 
