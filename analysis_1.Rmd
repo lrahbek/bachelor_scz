@@ -1,0 +1,846 @@
+---
+title: "analysis_1"
+output: html_document
+date: "2024-01-20"
+---
+
+# Setup and load files 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+pacman::p_load("tidyverse", "readxl", "ade4", "psych", "rstatix", "caret", "harrietr", "pROC", "sjPlot", "emmeans", "stringi")
+```
+
+```{r}
+#load items df and create relevant cols
+items <- read_xlsx("symptoms.xlsx", sheet = 1)
+items[items == "NA"] <- NA
+items$item <- str_c(items$SCALE_MEASUREMENT, " ", items$POINT_SCALE)
+items$item[90:101] <- items$SCALE_MEASUREMENT[90:101]
+items <- items %>% dplyr::select(!c("SCALE_MEASUREMENT", "POINT_SCALE"))
+
+items$NAME <- str_c(items$CODE, items$NAME, sep = " - ")
+
+#load symptom df
+symp <- read_xlsx("symptoms.xlsx", sheet = 2)
+symp[symp == "NA"] <- NA
+symp$n <- str_c("S", symp$n)
+
+#load nosology category df 
+nos_cat <- read_xlsx("symptoms.xlsx", sheet = 3)
+
+#load symptom df with count per instrument of compound and specific symptom rep
+symp_n <- read_xlsx("symptoms.xlsx", sheet = 4)
+
+#load df with symptoms for jaccard index calc
+jac <- read_xlsx("symptoms.xlsx", sheet = 5)
+jac$n[1:9] <- str_c(0, jac$n[1:9])
+jac$n <- str_c("S", jac$n)
+jac <- jac[,1:6]
+
+jac_wt <- jac #with c/s indication 
+
+jac[,3:6][jac[,3:6] == 2] <- 1
+```
+# Manual overlap analysis 
+## 1. Instrument overlap based on symptom categeroies 
+### 1.1 DSM-5 and ICD-11 coverage of each other 
+```{r}
+nos <- items[items$SCALE == "DSM-5" | items$SCALE =="ICD-11", 1:5]
+
+dsm_n_items <- nrow(items[items$SCALE == "DSM-5",])
+icd_n_items <- nrow(items[items$SCALE == "ICD-11",])
+
+nos_cat_o <- data.frame(symp_cat = c(unique(nos$SUB_SCALES), "not in nosologies"), 
+                          DSM_5 = c((1/dsm_n_items*100),
+                                    (1/dsm_n_items*100),
+                                    (1/dsm_n_items*100),
+                                    (1/dsm_n_items*100),
+                                    (1/dsm_n_items*100), NA), 
+                          ICD_11 = c((2/icd_n_items*100),
+                                     (1/icd_n_items*100),
+                                     (1/icd_n_items*100),
+                                     (2/icd_n_items*100),
+                                     (1/icd_n_items*100), NA))
+```
+
+### 1.2 Items in instruments that cover symptom catgories from nosologies 
+```{r}
+panss_n_items <- nrow(items[items$SCALE == "PANSS",])
+ss_n_items <- nrow(items[items$SCALE == "SANS_SAPS",])
+
+cat_o <- pivot_wider(as.data.frame(with(nos_cat, table(SCALE, NOS_CAT))), names_from = "SCALE", values_from = Freq)
+
+cat_o$`DSM-5` <- cat_o$`DSM-5`/dsm_n_items*100
+cat_o$`ICD-11` <- cat_o$`ICD-11`/icd_n_items*100
+cat_o$PANSS <- cat_o$PANSS/panss_n_items*100
+cat_o$SANS_SAPS <- cat_o$SANS_SAPS/ss_n_items*100
+
+cat_o[,2:5] <- round(cat_o[,2:5], digits = 2)
+
+```
+
+
+## 2. Symptom generation 
+### 2.1 Symptom appearance in scales 
+```{r}
+jac$scales_n <- rowSums(jac[3:6])
+
+symp_sum <- as.data.frame(table(jac$scales_n))
+symp_sum$perc_symp <- symp_sum$Freq/nrow(jac)*100
+colnames(symp_sum) <- c("n_scales", "n_symp", "perc_symp")
+
+mean(jac$scales_n)
+
+jac_wt$scales_n <- jac$scales_n
+```
+
+### 2.2 Distribution of idiosyncratic, specific and compound symptoms per instrument 
+```{r}
+ins_sum <- data.frame(
+  scale = c("DSM_5", "ICD_11", "PANSS", "SANS_SAPS"), 
+  n_items = c(dsm_n_items, icd_n_items, panss_n_items, ss_n_items), 
+  n_symp = c(colSums(jac[3:6])), 
+  perc_com = c(nrow(jac_wt[jac_wt$DSM_5 == 1,]), 
+               nrow(jac_wt[jac_wt$ICD_11 == 1,]),
+               nrow(jac_wt[jac_wt$PANSS == 1,]),
+               nrow(jac_wt[jac_wt$SANS_SAPS == 1,])),
+  perc_spec = c(nrow(jac_wt[jac_wt$DSM_5 == 2,]),
+                nrow(jac_wt[jac_wt$ICD_11 == 2,]),
+                nrow(jac_wt[jac_wt$PANSS == 2,]),
+                nrow(jac_wt[jac_wt$SANS_SAPS == 2,])),
+  perc_idio = c(nrow(jac[jac$scales_n == 1 & jac$DSM_5 >0, ]),
+                nrow(jac[jac$scales_n == 1 & jac$ICD_11 >0, ]),
+                nrow(jac[jac$scales_n == 1 & jac$PANSS >0, ]),
+                nrow(jac[jac$scales_n == 1 & jac$SANS_SAPS >0, ])))
+
+ins_sum$perc_com <- ins_sum$perc_com/ins_sum$n_symp*100
+ins_sum$perc_spec <- ins_sum$perc_spec/ins_sum$n_symp*100
+ins_sum$perc_idio <- ins_sum$perc_idio/ins_sum$n_symp*100
+```
+
+
+
+## 3. Overlap estimation
+### 3.1 Jaccard index 
+```{r}
+# DSM_5 overlap 
+a1<-1-(dist.binary(matrix(c(jac$DSM_5,jac$ICD_11),nrow=2,byrow=T),method=1)^2)
+b1<-1-(dist.binary(matrix(c(jac$DSM_5,jac$PANSS),nrow=2,byrow=T),method=1)^2)
+c1<-1-(dist.binary(matrix(c(jac$DSM_5,jac$SANS_SAPS),nrow=2,byrow=T),method=1)^2)
+DSM_5<-c(1,a1,b1,c1)
+
+# ICD_11 overlap 
+a2<-1-(dist.binary(matrix(c(jac$ICD_11,jac$DSM_5),nrow=2,byrow=T),method=1)^2)
+b2<-1-(dist.binary(matrix(c(jac$ICD_11,jac$PANSS),nrow=2,byrow=T),method=1)^2)
+c2<-1-(dist.binary(matrix(c(jac$ICD_11,jac$SANS_SAPS),nrow=2,byrow=T),method=1)^2)
+ICD_11<-c(a2, 1, b2, c2)
+
+#PANSS overlap 
+a3<-1-(dist.binary(matrix(c(jac$PANSS,jac$DSM_5),nrow=2,byrow=T),method=1)^2)
+b3<-1-(dist.binary(matrix(c(jac$PANSS,jac$ICD_11),nrow=2,byrow=T),method=1)^2)
+c3<-1-(dist.binary(matrix(c(jac$PANSS,jac$SANS_SAPS),nrow=2,byrow=T),method=1)^2)
+PANSS<-c(a3, b3, 1, c3)
+
+#SANS/SAPS overlap
+a4<-1-(dist.binary(matrix(c(jac$SANS_SAPS,jac$DSM_5),nrow=2,byrow=T),method=1)^2)
+b4<-1-(dist.binary(matrix(c(jac$SANS_SAPS,jac$ICD_11),nrow=2,byrow=T),method=1)^2)
+c4<-1-(dist.binary(matrix(c(jac$SANS_SAPS,jac$PANSS),nrow=2,byrow=T),method=1)^2)
+SANS_SAPS<-c(a4,b4,c4, 1)
+
+#table with all similarity values
+jac_mat = matrix(nrow=4, ncol=4) 
+colnames(jac_mat) <- c("DSM_5",	"ICD_11",	"PANSS",	"SANS_SAPS")
+rownames(jac_mat) <- c("DSM_5",	"ICD_11",	"PANSS",	"SANS_SAPS")
+jac_mat[1,]<-DSM_5
+jac_mat[2,]<-ICD_11
+jac_mat[3,]<-PANSS
+jac_mat[4,]<-SANS_SAPS
+isSymmetric(jac_mat)
+```
+
+
+```{r}
+jac_mat[jac_mat == 1] <- 0 # replace diagonal with 0
+#col means 
+dsm_5_m <- mean(jac_mat[2:4,1])
+icd_11_m <- mean(jac_mat[c(1,3,4),2])
+panss_m <- mean(jac_mat[c(1,2,4),3])
+sans_saps_m <- mean(jac_mat[c(1,3,3),4])
+
+tot_m <- mean(dsm_5_m, icd_11_m, panss_m, sans_saps_m) 
+
+corr <- 
+  data.frame(
+    scale = row.names(jac_mat), 
+    mean = c(dsm_5_m, icd_11_m, panss_m, sans_saps_m), 
+    length1 = length1<-c(5,7,30,59), 
+    length2 = 
+      c(nrow(jac[jac$DSM_5 == 1, ]),
+        nrow(jac[jac$ICD_11 == 1, ]),
+        nrow(jac[jac$PANSS == 1, ]),
+        nrow(jac[jac$SANS_SAPS == 1,])))
+```
+
+### 3.2 Visualization, including symptom type (compound or specific)
+#### 3.2.1 Prep df for vizualition 
+```{r}
+jac_wt$n <- factor(jac_wt$n, ordered = T)
+jac_viz <- pivot_longer(jac_wt, cols = c("DSM_5", "ICD_11", "PANSS", "SANS_SAPS"))
+jac_viz <- jac_viz %>% filter(!c(value == 0))
+jac_viz$value[jac_viz$value == "1"] <- "compound"
+jac_viz$value[jac_viz$value == "2"] <- "specific"
+
+jac_viz$name <- ordered(jac_viz$name, levels = c("DSM_5", "ICD_11", "SANS_SAPS", "PANSS"))
+jac_viz$ins_num <- as.numeric(jac_viz$name)
+```
+
+#### 3.2.2 Prep df angles 
+```{r}
+angle_df <- data.frame(id = c(1:63), 
+                   angle = NA, 
+                   hjust = NA)
+
+nS <- length(jac$n) #n symptoms 
+angle_df$angle <- 90-360*angle_df$id/nS
+angle_df$hjust <- ifelse(angle_df$angle < -90, 1, 0)
+angle_df$angle <- ifelse(angle_df$angle< -90, angle_df$angle+180, angle_df$angle)
+angle_df$n <- jac_wt$n
+
+jac_viz <- merge(jac_viz, angle_df)
+colnames(jac_viz) <- 
+  c("n", "symptom", "scales_n", "scale", "type", "ins_num", "id", "angle", "hjust")
+```
+
+#### 3.2.3 Prep colours for viz
+```{r}
+## fill colour 
+dp$fill <- str_c(dp$scale, dp$type, sep = "-")
+
+display.brewer.all(type = "seq")
+or <- brewer.pal(9, "Oranges")
+bu <- brewer.pal(9, "Blues")
+pi <- brewer.pal(9, "PuRd")
+gr <- brewer.pal(9, "Greens")
+
+col1 <- c(pi[5], gr[5], or[4], bu[5])
+s <- c("DSM_5", "ICD_11", "SANS_SAPS", "PANSS")
+col1 <- setNames(col, s)
+
+fil1 <- c(pi[c(3,5)], gr[c(3,5)], or[c(2,4)], bu[c(3,5)])
+sf <- c("DSM_5-compound", 'DSM_5-specific', "ICD_11-compound", "ICD_11-specific", 
+       "SANS_SAPS-compound", "SANS_SAPS-specific", 
+       "PANSS-compound", "PANSS-specific")
+fil1 <- setNames(fil1, sf)
+```
+
+
+#### 3.2.4 Plot viz 
+```{r}
+p1 <- ggplot(jac_viz, 
+             aes(x= factor(n), y=ins_num, group=n, colour = scale, shape = type, rev=F))+
+  # Lines and background
+  geom_line() + 
+  xlab("") +
+  ylab("") +
+  geom_hline(yintercept = 1:4, colour = "grey80", linewidth = .2) +
+  geom_vline(xintercept = 1:63, colour = "grey80", linewidth = .2) +
+  geom_line(colour="grey60", linetype = 1) +
+  geom_rect(xmin=-Inf,xmax=Inf,ymin=-Inf,ymax=0.99,fill="white", color=NA) +
+  geom_rect(xmin=-Inf,xmax=Inf,ymin=4.01,ymax=6,fill="white", color=NA) +
+  # Points 
+  geom_point(size=3, stroke = 0.9, fill = "white") +
+  scale_shape_manual(values = c(21,19)) + 
+  # Theme
+  coord_polar() +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.text = element_blank(),
+        panel.grid = element_blank(),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        plot.background = element_blank(),
+        plot.margin = unit(c(0,0,0,1.1), "cm"),
+        legend.margin = margin(-0.5,0,0,0, unit = "cm"),
+        legend.position=c(0,0.8),
+        legend.text = element_text(size = 7),
+        legend.key.size = unit(0.4, "cm"),
+        legend.key = element_rect(fill = "white")) +
+  scale_y_continuous(limits=c(-4,5), expand=c(0,0), breaks=1:4) + 
+  # Legends and labels 
+  guides(color = guide_legend(title = "", ncol = 1), 
+         shape = guide_legend(title = "", ncol = 1),
+         fill = "none", alpha = "none") + 
+  #axis tick labels
+  geom_text(jac_viz, 
+            mapping = aes(x= factor(n, levels = angle_df$n),y= 4.5, 
+                          label= n, angle = angle, hjust = hjust),size=2.4, 
+            inherit.aes = F, show.legend = F) ;p1
+```
+#### 3.2.5 Plot symptom names 
+```{r}
+#shorten names of symptoms 
+jac$symptoms[jac$n == "S36" ] <- "Unable to complete tasks"
+jac$symptoms[jac$n == "S38" ] <- "No enjoyment from activities"
+jac$symptoms[jac$n == "S39" ] <- "No interest in activities"
+jac$symptoms[jac$n == "S47" ] <- "Aggressive and agitated behaviour"
+jac$symptoms[jac$n == "S48" ] <- "Repetetive, stereotyped behaviour"
+jac$symptoms[jac$n == "S57" ] <- "Avoids interaction during interview"
+
+
+jac$posx <-  rep(c(-0.9, 2.8, 6.25, 10.15, 13.8, 18.2, 22.35), each = 9)
+jac$posy <- rep(9:1, 7)
+
+p2 <- ggplot(jac, aes(x = posx, y = posy)) + 
+  geom_text(mapping = 
+              aes(label = str_c(n, symptoms, sep = " "), 
+                  hjust = "left"), size = 1.4)+
+  expand_limits(x = c(1,25), y = c(1,45))+
+  theme(panel.background =element_blank(), 
+        axis.text = element_blank(), 
+        axis.ticks = element_blank(),
+        axis.title = element_blank(), 
+        plot.margin = unit(c(0,0,0,-0.9), "cm"));p2
+```
+
+#### 3.2.6 Save plot ad pdf 
+```{r}
+ggsave("fried_plot2.pdf", plot = p1)
+ggsave("fried_text1.pdf", plot = p2)
+ggsave("fried_c1.pdf", plot = p3)
+
+```
+
+## 4. Sentence Transformer prep 
+### 4.1 Create dataframe with item pairs and how many symptoms they share 
+```{r}
+st <- pivot_longer(symp, cols = c(3:15), names_to = c("scale", "del", "type"), names_sep = "_*_", values_to = "code", values_drop_na = T)
+st <- st[c(1:3, 5:6)]
+
+st_mat <- pivot_wider(st[c(1,5,4)], names_from = c("code"), values_from = ("type"))
+                      
+st_mat <- as.data.frame(st_mat)
+rownames(st_mat) <- st_mat$n
+st_mat <- st_mat[2:102]
+
+st_mat[st_mat == "compound"] <- 1
+st_mat[st_mat == "specific"] <- 2
+
+st_count <- pairwiseCount(st_mat)
+```
+
+### 4.2 Binary classification evaluator dataframe
+```{r}
+#version1: every pair once
+BC_eval_df <- melt_dist(st_count)
+
+colnames(BC_eval_df) <- c("item1", "item2", "count")
+# 1 is awarded to each pair of items from same sub-scale in sans/saps 
+for(row in 1:nrow(BC_eval_df)){
+  if ((items$SUB_SCALES[items$CODE == (BC_eval_df$item1[row])] == 
+      items$SUB_SCALES[items$CODE == (BC_eval_df$item2[row])]) & 
+      items$SCALE[items$CODE == (BC_eval_df$item2[row])] == "SANS_SAPS" &
+      items$SCALE[items$CODE == (BC_eval_df$item1[row])] == "SANS_SAPS"){
+    BC_eval_df$count[row] <- BC_eval_df$count[row] + 1
+  }
+}
+
+BC_eval_df$bc_overlap[BC_eval_df$count == 0] <- 0
+BC_eval_df$bc_overlap[BC_eval_df$count > 0] <- 1
+```
+
+```{r}
+#version2: every pair twice
+BC_eval_df2 <- cor_gather(st_count)
+
+colnames(BC_eval_df2) <- c("item1", "item2", "count")
+# 1 is awarded to each pair of items from same sub-scale in sans/saps 
+for(row in 1:nrow(BC_eval_df2)){
+  if ((items$SUB_SCALES[items$CODE == (BC_eval_df2$item1[row])] == 
+      items$SUB_SCALES[items$CODE == (BC_eval_df2$item2[row])]) & 
+      items$SCALE[items$CODE == (BC_eval_df2$item2[row])] == "SANS_SAPS" &
+      items$SCALE[items$CODE == (BC_eval_df2$item1[row])] == "SANS_SAPS"){
+    BC_eval_df2$count[row] <- BC_eval_df2$count[row] + 1
+  }
+}
+
+BC_eval_df2$bc_overlap[BC_eval_df2$count == 0] <- 0
+BC_eval_df2$bc_overlap[BC_eval_df2$count > 0] <- 1
+```
+
+```{r}
+length(BC_eval_df$bc_overlap[BC_eval_df$bc_overlap == 1]) #493
+length(BC_eval_df$bc_overlap[BC_eval_df$bc_overlap == 0]) #4557
+```
+
+
+### 4.3 Export files
+```{r}
+write_csv(BC_eval_df, "bc_eval_df.csv")
+
+writeLines(items$item, "items.txt")
+writeLines(items$CODE, "code.txt")
+writeLines(items$SCALE, "scale.txt")
+writeLines(items$NAME), "name.txt")
+```
+
+
+# NLP overlap analysis 
+
+## 1. Load cosine scores from pre-trained models
+```{r}
+cossco1 <- read.csv("cossco1.csv", row.names = 1)
+cossco2 <- read.csv("cossco2.csv", row.names = 1)
+cossco3 <- read.csv("cossco3.csv", row.names = 1)
+```
+
+## 2. df with cosine scores between all pairs for the three models 
+```{r}
+# Long dataframe for model 1, 2 and 3
+cos1u <- as.data.frame(melt_dist(cossco1))
+colnames(cos1u) <- c("item1", "item2", "cos_m1")
+cos2u <- as.data.frame(melt_dist(cossco2))
+colnames(cos2u) <- c("item1", "item2", "cos_m2")
+cos3u <- as.data.frame(melt_dist(cossco3))
+colnames(cos3u) <- c("item1", "item2", "cos_m3")
+
+# Merge dfs so each models calculated cosine scores gets a column 
+cosu <- merge(cos1u, cos2u, sort = F)
+cosu <- merge(cosu, cos3u, sort = F)
+
+# append instrument for each item 
+cosu <- merge(cosu, items[c(1,3)], by.x = "item1", by.y = "CODE")
+colnames(cosu)[6] <- 'item1_scale'
+cosu <- merge(cosu, items[c(1,3)], by.x = "item2", by.y = "CODE")
+colnames(cosu)[7] <- 'item2_scale'
+
+# column indicating if the pairs is from the same instrument
+cosu$WA <- ifelse(cosu$item1_scale == cosu$item2_scale, "within", "across")
+
+# append manual overlap 
+cosu <- merge(cosu, BC_eval_df2[c(1,2,4)], by.x = c("item1", "item2"), by.y = c("item1", "item2"))
+
+cosu <- cosu %>% 
+  mutate_at(c("item1", "item2", "item1_scale", "item2_scale", "WA", "bc_overlap"), as.factor)
+cosu$bc <- ordered(cosu$bc_overlap)
+
+cosu <- cosu[-9]
+```
+
+## 3. Implementing threshholds and calculating evaluation metrics for the models
+### 3.1 df for threhold and metrics 
+```{r}
+metrics <- data.frame(name = c("cos_m1", "cos_m2", "cos_m3"), 
+                      G_means_thr = NA, 
+                      Sensitivity = NA, 
+                      Specificity = NA, 
+                      G_mean = NA, 
+                      Balanced_Accuracy = NA, 
+                      Precision = NA, 
+                      F1 = NA)
+```
+
+### 3.2 g-means threhold and metrics 
+```{r}
+#model 1
+m1_roc <- roc(cosu$bc, cosu$cos_m1)
+m1_roc_df <- coords(m1_roc, x = "all", ret = "all")
+m1_roc_df$G_mean <- sqrt(m1_roc_df$sensitivity*m1_roc_df$specificity)
+
+metrics$G_means_thr[1] <- m1_roc_df$threshold[m1_roc_df$G_mean==max(m1_roc_df$G_mean)]
+metrics$Sensitivity[1] <- m1_roc_df$sensitivity[m1_roc_df$G_mean==max(m1_roc_df$G_mean)]
+metrics$Specificity[1] <- m1_roc_df$specificity[m1_roc_df$G_mean==max(m1_roc_df$G_mean)]
+metrics$G_mean[1] <- m1_roc_df$G_mean[m1_roc_df$G_mean==max(m1_roc_df$G_mean)]
+metrics$Balanced_Accuracy[1] <- (metrics$Sensitivity[1]+metrics$Specificity[1])*0.5
+metrics$Precision[1] <- m1_roc_df$precision[m1_roc_df$G_mean==max(m1_roc_df$G_mean)]
+metrics$F1[1] <- (2*metrics$Precision[1]*metrics$Sensitivity[1])/(metrics$Precision[1]+ metrics$Sensitivity[1])
+
+#model 2
+m2_roc <- roc(cosu$bc, cosu$cos_m2)
+m2_roc_df <- coords(m2_roc, x = "all", ret = "all")
+m2_roc_df$G_mean <- sqrt(m2_roc_df$sensitivity*m2_roc_df$specificity)
+
+metrics$G_means_thr[2] <- m2_roc_df$threshold[m2_roc_df$G_mean==max(m2_roc_df$G_mean)]
+metrics$Sensitivity[2] <- m2_roc_df$sensitivity[m2_roc_df$G_mean==max(m2_roc_df$G_mean)]
+metrics$Specificity[2] <- m2_roc_df$specificity[m2_roc_df$G_mean==max(m2_roc_df$G_mean)]
+metrics$G_mean[2] <- m2_roc_df$G_mean[m2_roc_df$G_mean==max(m2_roc_df$G_mean)]
+metrics$Balanced_Accuracy[2] <- (metrics$Sensitivity[2]+metrics$Specificity[2])*0.5
+metrics$Precision[2] <- m2_roc_df$precision[m2_roc_df$G_mean==max(m2_roc_df$G_mean)]
+metrics$F1[2] <- (2*metrics$Precision[2]*metrics$Sensitivity[2])/(metrics$Precision[2]+ metrics$Sensitivity[2])
+
+#model 3
+m3_roc <- roc(cosu$bc, cosu$cos_m3)
+m3_roc_df <- coords(m3_roc, x = "all", ret = "all")
+m3_roc_df$G_mean <- sqrt(m3_roc_df$sensitivity*m3_roc_df$specificity)
+
+metrics$G_means_thr[3] <- m3_roc_df$threshold[m3_roc_df$G_mean==max(m3_roc_df$G_mean)]
+metrics$Sensitivity[3] <- m3_roc_df$sensitivity[m3_roc_df$G_mean==max(m3_roc_df$G_mean)]
+metrics$Specificity[3] <- m3_roc_df$specificity[m3_roc_df$G_mean==max(m3_roc_df$G_mean)]
+metrics$G_mean[3] <- m3_roc_df$G_mean[m3_roc_df$G_mean==max(m3_roc_df$G_mean)]
+metrics$Balanced_Accuracy[3] <- (metrics$Sensitivity[3]+metrics$Specificity[3])*0.5
+metrics$Precision[3] <- m3_roc_df$precision[m3_roc_df$G_mean==max(m3_roc_df$G_mean)]
+metrics$F1[3] <- (2*metrics$Precision[3]*metrics$Sensitivity[3])/(metrics$Precision[3]+ metrics$Sensitivity[3])
+```
+
+### 3.3 Defining 0/1 classification for each pair based on threhold 
+```{r}
+cosu$m1_bc_g <- ifelse(cosu$cos_m1>metrics$G_means_thr[1], 1, 0)
+cosu$m2_bc_g <- ifelse(cosu$cos_m2>metrics$G_means_thr[2], 1, 0)
+cosu$m3_bc_g <- ifelse(cosu$cos_m2>metrics$G_means_thr[3], 1, 0)
+```
+
+### 3.4 Adding manual nosology category to df 
+```{r}
+cosu <- merge(cosu, nos_cat[2:3], by.x = "item2", by.y = "ITEMS")
+cosu <- merge(cosu, nos_cat[2:3], by.x = "item1", by.y = "ITEMS")
+
+
+cosu$nos_cat <- ifelse(cosu$NOS_CAT.x == cosu$NOS_CAT.y, cosu$NOS_CAT.x, 
+       str_c(cosu$NOS_CAT.x, cosu$NOS_CAT.y, sep = " - "))
+cosu <- cosu[-c(13:14)]
+
+for (row in 1:nrow(cosu)){
+  if (grepl(" - ", cosu$nos_cat[row])){
+    cosu$nos_cat[row] <- str_c(str_sort(unlist(strsplit(cosu$nos_cat[row], 
+                                                           split = " - "))), 
+                                  collapse = " - ")
+  }
+  else (cosu$nos_cat[row] <- cosu$nos_cat[row])
+}
+
+cosu$nos_cat_WA <- ifelse(grepl(" - ", cosu$nos_cat), "across", "within")
+```
+
+## 4. Comparing the models 
+### 4.1 Plotting cosine similairy distribution for manual classification and withn/across overlap
+```{r}
+plot(cosu$cos_m1, cosu$WA)
+plot(cosu$cos_m2, cosu$WA)
+plot(cosu$cos_m3, cosu$WA)
+
+plot(cosu$cos_m1, cosu$bc)
+plot(cosu$cos_m2, cosu$bc)
+plot(cosu$cos_m3, cosu$bc)
+```
+
+### 4.2 Measures of spread etc of cosine scores for each model 
+```{r}
+cosu %>% 
+  pivot_longer(cols = c(3:5)) %>% 
+  ggplot()+
+  geom_boxplot(aes(x = value, y = bc, alpha = 0.2)) +
+  facet_wrap(~name, nrow = 3 ) +
+  geom_vline(data = metrics, aes(xintercept = G_means_thr))
+
+```
+
+
+### 4.3 Density plots for each model, with threhshold line
+```{r}
+cosu %>% 
+  pivot_longer(cols = c(3:5)) %>% 
+  ggplot()+
+  geom_density(aes(x = value, after_stat(count), color = bc, fill = bc, alpha = 0.2)) +
+  facet_wrap(~name)+ 
+  geom_vline(data = metrics, aes(xintercept = G_means_thr))
+```
+
+
+### 4.4 Compare within vesus across scale overlap 
+```{r}
+lm1 <- lm(cos_m1 ~ bc*WA, data = cosu)
+lm2 <- lm(cos_m2 ~ bc*WA, data = cosu)
+lm3 <- lm(cos_m3 ~ bc*WA, data = cosu)
+
+summary(lm1)
+summary(lm2)
+summary(lm3)
+emmeans(lm2, list(pairwise ~ WA*bc),adjust = 'bonferroni')
+emmip(lm2, WA~bc, CIs = T)
+
+
+
+lm2c <- lm(cos_m2 ~ nos_cat*m2_bc_g, data = cosu[cosu$nos_cat_WA == "within",])
+summary(lm2c)
+emmeans(lm2c, list(pairwise ~ nos_cat),adjust = 'bonferroni')
+emmip(lm2c, nos_cat ~ m2_bc_g, CIs = T)
+```
+
+## 5. Model 2: instrument overlap 
+### 5.1 df with model 2
+```{r}
+cosu_m2 <- cosu[c(1,2,4,11,9,6:8)]
+
+cosu_m2 <- merge(cosu_m2, items[c(3:4)], by.x = "item2", by.y = "CODE")
+cosu_m2 <- merge(cosu_m2, items[c(3:4)], by.x = "item1", by.y = "CODE")
+
+colnames(cosu_m2)[c(1:2,9:10)] <- c("code1", "code2", "item2", "item1")
+
+cosu_m2$item1_scale <- as.character(cosu_m2$item1_scale)
+cosu_m2$item2_scale <- as.character(cosu_m2$item2_scale)
+
+cosu_m2$ins <- ifelse((cosu_m2$item1_scale %in% c("DSM-5", "ICD-11")) &
+                        (cosu_m2$item2_scale %in% c("DSM-5", "ICD-11")), "nos", 
+                      ifelse(cosu_m2$item1_scale %in% c("PANSS", "SANS_SAPS") &
+                        (cosu_m2$item2_scale %in% c("PANSS", "SANS_SAPS")), "scales",
+                      "nos_scale"))
+
+cosu_m2$scale_c <- str_c(cosu_m2$item1_scale, cosu_m2$item2_scale, sep = "-")
+```
+
+### 5.2 count, similar and disimilar pairs 
+```{r}
+length(cosu_m2$m2_bc_g[cosu_m2$m2_bc_g ==1])
+length(cosu_m2$m2_bc_g[cosu_m2$m2_bc_g ==0])
+length(cosu_m2$bc[cosu_m2$bc ==1])
+length(cosu_m2$bc[cosu_m2$bc ==0])
+
+
+length(cosu_m2$WA[cosu_m2$WA =="within"])
+length(cosu_m2$WA[cosu_m2$WA =="across"])
+
+```
+
+```{r}
+cosu_m2 <- merge(cosu_m2, nos_cat[2:3], by.x = "code2", by.y = "ITEMS")
+cosu_m2 <- merge(cosu_m2, nos_cat[2:3], by.x = "code1", by.y = "ITEMS")
+
+
+cosu_m2$nos_cat <- ifelse(cosu_m2$NOS_CAT.x == cosu_m2$NOS_CAT.y, cosu_m2$NOS_CAT.x, 
+       str_c(cosu_m2$NOS_CAT.x, cosu_m2$NOS_CAT.y, sep = " - "))
+cosu_m2 <- cosu_m2[-c(13:14)]
+
+for (row in 1:nrow(cosu_m2)){
+  if (grepl(" - ", cosu_m2$nos_cat[row])){
+    cosu_m2$nos_cat[row] <- str_c(str_sort(unlist(strsplit(cosu_m2$nos_cat[row], 
+                                                           split = " - "))), 
+                                  collapse = " - ")
+  }
+  else (cosu_m2$nos_cat[row] <- cosu_m2$nos_cat[row])
+}
+
+cosu_m2$nos_cat_WA <- ifelse(grepl(" - ", cosu_m2$nos_cat), "across", "within")
+```
+
+
+
+### 5.3 instrument overlap 
+#### 5.3.1 Matrix with cosine scores from model 2, NA in all cells below threhold 
+```{r}
+m2_mat <- as.matrix(cossco2)
+m2_mat[m2_mat < metrics$G_means_thr[2]] <- NA
+```
+
+
+#### 5.3.2 PANSS overlap with other instruments 
+```{r}
+# items in PANSS has a mean cosine score with similar items in: 
+## SANS/SAPS of: 
+mean(rowMeans(m2_mat[60:89,1:59], na.rm = T)) #0.5021464
+sd(rowMeans(m2_mat[60:89,1:59], na.rm = T)) #0.03358987
+## DSM-5 of:
+mean(rowMeans(m2_mat[60:89,90:94], na.rm = T), na.rm = T) #0.5104322
+sd(rowMeans(m2_mat[60:89,90:94], na.rm = T), na.rm = T) #0.05134019
+## ICD-11 of:
+mean(rowMeans(m2_mat[60:89,95:101], na.rm = T)) #0.5176506
+sd(rowMeans(m2_mat[60:89,95:101], na.rm = T)) #0.03932892
+
+
+# items in PANSS are represented in a mean of x % of items in each instrument 
+## SANS/SAPS: 
+mean(rowSums(m2_mat[60:89,1:59] >0, na.rm = T))/59*100 #19.43503
+sd(rowSums(m2_mat[60:89,1:59] >0, na.rm = T))/59*100 #9.259215
+## DSM-5:
+mean(rowSums(m2_mat[60:89,90:94] >0, na.rm = T), na.rm = T)/5*100 #43.33333
+sd(rowSums(m2_mat[60:89,90:94] >0, na.rm = T), na.rm = T)/5*100 #28.32488
+## ICD-11 of:
+mean(rowSums(m2_mat[60:89,95:101]>0, na.rm = T))/7*100 #40
+sd(rowSums(m2_mat[60:89,95:101]>0, na.rm = T))/7*100 #19.63782
+
+# Number of items in PANSS not represented by: 
+## SANS/SAPS: 
+sum(rowSums(is.na(m2_mat[60:89,1:59])) == 59) #0
+## DSM-5:
+p_ss_not <- sum(rowSums(is.na(m2_mat[60:89,90:94]))==5) #3; P7, G4, N5
+## ICD-11 of:
+sum(rowSums(is.na(m2_mat[60:89,95:101]))==7) #0
+
+```
+#### 5.3.3 SANS/SAPS overlap with other instruments 
+```{r}
+# items in SANS/SAPS has a mean cosine score with similar items in: 
+## PANSS of: 
+mean(rowMeans(m2_mat[1:59,60:89], na.rm = T), na.rm = T) #0.5099867
+sd(rowMeans(m2_mat[1:59,60:89], na.rm = T), na.rm = T) #0.04167022
+## DSM-5 of:
+mean(rowMeans(m2_mat[1:59,90:94], na.rm = T), na.rm = T) #0.5391913
+sd(rowMeans(m2_mat[1:59,90:94], na.rm = T), na.rm = T) #0.07494088
+## ICD-11 of:
+mean(rowMeans(m2_mat[1:59,95:101], na.rm = T), na.rm = T) #0.5349388
+sd(rowMeans(m2_mat[1:59,95:101], na.rm = T), na.rm = T) #0.079664
+
+
+# items in SANS/SAPS are represented in a mean of x % of items in each instrument 
+## PANSS: 
+mean(rowSums(m2_mat[1:59,60:89] >0, na.rm = T))/30*100 #19.43503
+sd(rowSums(m2_mat[1:59,60:89] >0, na.rm = T))/30*100 #13.50681
+## DSM-5:
+mean(rowSums(m2_mat[1:59,90:94] >0, na.rm = T), na.rm = T)/5*100 #29.83051
+sd(rowSums(m2_mat[1:59,90:94] >0, na.rm = T), na.rm = T)/5*100 #24.73944
+## ICD-11 of:
+mean(rowSums(m2_mat[1:59,95:101]>0, na.rm = T))/7*100 #25.42373
+sd(rowSums(m2_mat[1:59,95:101]>0, na.rm = T))/7*100 #21.0672
+
+# Number of items in SANS/SAPS not represented by: 
+## PANSS: 
+ss_p_not <- sum(rowSums(is.na(m2_mat[1:59,60:89])) == 30) #2; SS34, SS68
+## DSM-5:
+ss_d_not <- sum(rowSums(is.na(m2_mat[1:59,90:94]))==5) #15; SS11, SS13, SS14, SS17, SS21, SS22, SS24, SS25, SS31, SS34, SS56, SS62, SS64, SS65, SS68
+## ICD-11 of:
+ss_i_not <- sum(rowSums(is.na(m2_mat[1:59,95:101]))==7) #13; SS11, SS13, SS14, SS16, SS19, SS21, SS22, SS25, SS29, SS31, SS56, SS67, SS68
+
+```
+#### 5.3.4 DSM-5 overlap with other instruments 
+```{r}
+# items in DSM-5 has a mean cosine score with similar items in: 
+## PANSS of: 
+mean(rowMeans(m2_mat[90:94,60:89], na.rm = T), na.rm = T) #0.5199992
+sd(rowMeans(m2_mat[90:94,60:89], na.rm = T), na.rm = T) #0.02951063
+## SANS/SAPS of:
+mean(rowMeans(m2_mat[90:94,1:59], na.rm = T), na.rm = T) #0.5408937
+sd(rowMeans(m2_mat[90:94,1:59], na.rm = T), na.rm = T) #0.04702941
+## ICD-11 of:
+mean(rowMeans(m2_mat[90:94,95:101], na.rm = T), na.rm = T) #0.6172649
+sd(rowMeans(m2_mat[90:94,95:101], na.rm = T), na.rm = T) #0.02267709
+
+
+# items in DSM-5 are represented in a mean of x % of items in each instrument 
+## PANSS: 
+mean(rowSums(m2_mat[90:94,60:89] >0, na.rm = T))/30*100 #43.33333
+sd(rowSums(m2_mat[90:94,60:89] >0, na.rm = T))/30*100 #17.63834
+## SANS/SAPS :
+mean(rowSums(m2_mat[90:94,1:59] >0, na.rm = T), na.rm = T)/59*100 #29.83051
+sd(rowSums(m2_mat[90:94,1:59] >0, na.rm = T), na.rm = T)/59*100 #7.348977
+## ICD-11 of:
+mean(rowSums(m2_mat[90:94,95:101]>0, na.rm = T))/7*100 #54.28571
+sd(rowSums(m2_mat[90:94,95:101]>0, na.rm = T))/7*100 #15.64922
+
+# Number of items in DSM-5 not represented by: 
+## PANSS: 
+sum(rowSums(is.na(m2_mat[90:94,60:89])) == 30) #0
+## SANS/SAPS:
+sum(rowSums(is.na(m2_mat[90:94,1:59]))==59) #0
+## ICD-11 of:
+sum(rowSums(is.na(m2_mat[90:94,95:101]))==7) #0
+
+```
+#### 5.3.5 ICD-11 overlap with other instruments 
+```{r}
+# items in ICD-11 has a mean cosine score with similar items in: 
+## PANSS of: 
+mean(rowMeans(m2_mat[95:101,60:89], na.rm = T), na.rm = T) #0.5198662
+sd(rowMeans(m2_mat[95:101,60:89], na.rm = T), na.rm = T) #0.04432886
+## SANS/SAPS of:
+mean(rowMeans(m2_mat[95:101,1:59], na.rm = T), na.rm = T) #0.5422404
+sd(rowMeans(m2_mat[95:101,1:59], na.rm = T), na.rm = T) #0.05301509
+## DSM-5 of:
+mean(rowMeans(m2_mat[95:101,90:94], na.rm = T), na.rm = T) #0.6362345
+sd(rowMeans(m2_mat[95:101,90:94], na.rm = T), na.rm = T) #0.1144019
+
+
+# items in ICD-11 are represented in a mean of x % of items in each instrument 
+## PANSS: 
+mean(rowSums(m2_mat[95:101,60:89] >0, na.rm = T))/30*100 #40
+sd(rowSums(m2_mat[95:101,60:89] >0, na.rm = T))/30*100 #25.89151
+## SANS/SAPS :
+mean(rowSums(m2_mat[95:101,1:59] >0, na.rm = T), na.rm = T)/59*100 #25.42373
+sd(rowSums(m2_mat[95:101,1:59] >0, na.rm = T), na.rm = T)/59*100 #11.57848
+## DSM-5 of:
+mean(rowSums(m2_mat[95:101,90:94]>0, na.rm = T))/5*100 #54.28571
+sd(rowSums(m2_mat[95:101,90:94]>0, na.rm = T))/5*100 #22.25395
+
+# Number of items in ICD-11 not represented by: 
+## PANSS: 
+sum(rowSums(is.na(m2_mat[95:101,60:89])) == 30) #0
+## SANS/SAPS:
+sum(rowSums(is.na(m2_mat[95:101,1:59]))==59) #0
+## DSM-5 of:
+sum(rowSums(is.na(m2_mat[95:101,90:94]))==5) #0
+
+```
+
+
+
+### item rep 
+```{r}
+#empty matrix 
+m2_mat_m <- m2_mat
+m2_mat[is.na(m2_mat)] <- 0
+m2_mat_m[] <- 0
+
+for (row in 1:nrow(m2_mat)){
+  max_ss <- as.numeric(which.max(m2_mat[row, 1:59]))
+  m2_mat_m[row, max_ss] <- m2_mat[row, max_ss] 
+  
+  max_p <- as.numeric(which.max(m2_mat[row, 60:89]))+59
+  m2_mat_m[row, max_p] <- m2_mat[row, max_p] 
+  
+  max_d <- as.numeric(which.max(m2_mat[row, 90:94]))+89
+  m2_mat_m[row, max_d] <- m2_mat[row, max_d] 
+  
+  max_i <- as.numeric(which.max(m2_mat[row, 95:101]))+94
+  m2_mat_m[row, max_i] <- m2_mat[row, max_i] 
+}
+
+rowSums(m2_mat_m>0)
+diag(m2_mat_m) <- NA
+m2_mat_m[m2_mat_m == 0] <- NA
+m2_df_m <- cor_gather(m2_mat_m)
+
+#to incl all codes in df
+ext <- merge(items[c(3:4)], nos_cat, by.x = "CODE", by.y = "ITEMS")
+ext <- ext %>% slice(rep(1:n(), each = 3))
+
+ext$rep_in <- ifelse(ext$SCALE == "ICD-11", 
+       rep(c("DSM-5", "PANSS", "SANS_SAPS"), 
+           each = 1), 
+       ifelse(ext$SCALE == "DSM-5", 
+              rep(c("ICD-11", "PANSS", "SANS_SAPS"), 
+                  each = 1),
+              ifelse(ext$SCALE == "PANSS", 
+                     rep(c("ICD-11", "DSM-5", "SANS_SAPS"), 
+                         each = 1),
+                     ifelse(ext$SCALE == "SANS_SAPS", 
+                            rep(c("ICD-11", "PANSS", "DSM-5"), each = 1), NA))))
+colnames(ext) <- c("items", "item_name", "item_scale", "item_cat", "rep_in")
+              
+m2_df_m <- merge(m2_df_m, nos_cat, by.x = "var2", by.y = "ITEMS")
+m2_df_m <- merge(m2_df_m, items[c(3:4)], by.x = "var2", by.y = "CODE")
+colnames(m2_df_m) <- c("rep_by", "items", "cos", "rep_in", "rep_cat", "rep_name")
+
+m2_df_m <- merge(ext, m2_df_m, by.x = c("items", "rep_in"), by.y = c("items", "rep_in"), all= T)  
+
+m2_df_m <- merge(m2_df_m, BC_eval_df2[c(1,2,4)], by.x = c("items", "rep_by"), by.y = c("item1", "item2"), all.x = T)
+
+m2_df_m <- m2_df_m[c(4,9,5,3, 7,6,8, 10,1,2)]
+m2_df_m$cos[is.na(m2_df_m$cos)] <- 0
+
+m2_df_m %>% 
+  summarise(mean(cos), sd(cos), .by = c(item_scale, rep_in)) 
+m2_df_m%>% 
+  summarise(mean(cos), sd(cos), .by = item_scale)
+
+table(m2_df_m$rep_in[m2_df_m$cos == 0], m2_df_m$items[m2_df_m$cos == 0])
+
+(m2_df_m$items[m2_df_m$cos == 0])
+
+table(m2_df_m$rep_in, m2_df_m$item_scale, m2_df_m$bc_overlap)
+
+13/19*100
+
+24/
+```
+
+
+
+
+
