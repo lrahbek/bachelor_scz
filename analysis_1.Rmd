@@ -68,8 +68,9 @@ nos_cat_o <- data.frame(symp_cat = c(unique(items$SUB_SCALES[90:101]), "not in n
 panss_n_items <- nrow(items[items$SCALE == "PANSS",])
 ss_n_items <- nrow(items[items$SCALE == "SANS_SAPS",])
 
-cat_o <- pivot_wider(as.data.frame(with(nos_cat, table(SCALE, NOS_CAT))), names_from = "SCALE", values_from = Freq)
+cat_o_n <- pivot_wider(as.data.frame(with(nos_cat, table(SCALE, NOS_CAT))), names_from = "SCALE", values_from = Freq)
 
+cat_o <- cat_o_n
 cat_o$`DSM-5` <- cat_o$`DSM-5`/dsm_n_items*100
 cat_o$`ICD-11` <- cat_o$`ICD-11`/icd_n_items*100
 cat_o$PANSS <- cat_o$PANSS/panss_n_items*100
@@ -99,22 +100,22 @@ ins_sum <- data.frame(
   scale = c("DSM_5", "ICD_11", "PANSS", "SANS_SAPS"), 
   n_items = c(dsm_n_items, icd_n_items, panss_n_items, ss_n_items), 
   n_symp = c(colSums(jac[3:6])), 
-  perc_com = c(nrow(jac_wt[jac_wt$DSM_5 == 1,]), 
+  n_com = c(nrow(jac_wt[jac_wt$DSM_5 == 1,]), 
                nrow(jac_wt[jac_wt$ICD_11 == 1,]),
                nrow(jac_wt[jac_wt$PANSS == 1,]),
                nrow(jac_wt[jac_wt$SANS_SAPS == 1,])),
-  perc_spec = c(nrow(jac_wt[jac_wt$DSM_5 == 2,]),
+  n_spec = c(nrow(jac_wt[jac_wt$DSM_5 == 2,]),
                 nrow(jac_wt[jac_wt$ICD_11 == 2,]),
                 nrow(jac_wt[jac_wt$PANSS == 2,]),
                 nrow(jac_wt[jac_wt$SANS_SAPS == 2,])),
-  perc_idio = c(nrow(jac[jac$scales_n == 1 & jac$DSM_5 >0, ]),
+  n_idio = c(nrow(jac[jac$scales_n == 1 & jac$DSM_5 >0, ]),
                 nrow(jac[jac$scales_n == 1 & jac$ICD_11 >0, ]),
                 nrow(jac[jac$scales_n == 1 & jac$PANSS >0, ]),
                 nrow(jac[jac$scales_n == 1 & jac$SANS_SAPS >0, ])))
 
-ins_sum$perc_com <- ins_sum$perc_com/ins_sum$n_symp*100
-ins_sum$perc_spec <- ins_sum$perc_spec/ins_sum$n_symp*100
-ins_sum$perc_idio <- ins_sum$perc_idio/ins_sum$n_symp*100
+ins_sum$perc_com <- ins_sum$n_com/ins_sum$n_symp*100
+ins_sum$perc_spec <- ins_sum$n_spec/ins_sum$n_symp*100
+ins_sum$perc_idio <- ins_sum$n_idio/ins_sum$n_symp*100
 ```
 
 
@@ -177,7 +178,12 @@ jac_viz <- jac_viz %>% filter(!c(value == 0))
 jac_viz$value[jac_viz$value == "1"] <- "compound"
 jac_viz$value[jac_viz$value == "2"] <- "specific"
 
-jac_viz$name <- ordered(jac_viz$name, levels = c("DSM_5", "ICD_11", "SANS_SAPS", "PANSS"))
+jac_viz$name[jac_viz$name == "DSM_5"] <- "DSM-5"
+jac_viz$name[jac_viz$name == "ICD_11"] <- "ICD-11"
+jac_viz$name[jac_viz$name == "SANS_SAPS"] <- "SANS-PS"
+
+
+jac_viz$name <- ordered(jac_viz$name, levels = c("DSM-5", "ICD-11", "SANS-PS", "PANSS"))
 jac_viz$ins_num <- as.numeric(jac_viz$name)
 
 angle_df <- data.frame(id = c(1:63), 
@@ -264,8 +270,8 @@ p2 <- ggplot(jac, aes(x = posx, y = posy)) +
 
 #### 3.2.6 Save plot ad pdf 
 ```{r}
-ggsave("fried_plot3.jpeg", plot = p1, limitsize = F, dpi = 1000)
-ggsave("fried_text3.jpeg", plot = p2, limitsize = F, dpi = 1000)
+ggsave("symp_plot.jpeg", plot = p1, limitsize = F, dpi = 1000)
+ggsave("symp_text.jpeg", plot = p2, limitsize = F, dpi = 1000)
 ```
 
 ## 4. Prep data for sentence transformer encoding 
@@ -666,8 +672,11 @@ colnames(m2_df_nos) <- c("nos_item", "sc_item", "cos", "nos_cat")
 m2_df_nos <- merge(m2_df_nos, nos_cat[1:89,1:3], by.x = "sc_item", by.y = "ITEMS")
 
 table(m2_df_nos[1:30,c(4)])/30*100
+table(m2_df_nos[1:30,c(4)])
 
 table(m2_df_nos[31:89,c(4)])/59*100
+table(m2_df_nos[31:89,c(4)])
+
 ```
 
 
