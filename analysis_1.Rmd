@@ -12,7 +12,7 @@ pacman::p_load("tidyverse", "readxl", "ade4", "psych", "rstatix", "caret", "harr
 
 ```{r}
 #load items df and create relevant cols
-items <- read_xlsx("symptoms.xlsx", sheet = 1)
+items <- read_xlsx("symptoms_and_items.xlsx", sheet = 1)
 items[items == "NA"] <- NA
 items$item <- str_c(items$SCALE_MEASUREMENT, " ", items$POINT_SCALE)
 items$item[90:101] <- items$SCALE_MEASUREMENT[90:101]
@@ -21,18 +21,18 @@ items <- items %>% dplyr::select(!c("SCALE_MEASUREMENT", "POINT_SCALE"))
 items$NAME <- str_c(items$CODE, items$NAME, sep = " - ")
 
 #load symptom df
-symp <- read_xlsx("symptoms.xlsx", sheet = 2)
+symp <- read_xlsx("symptoms_and_items.xlsx", sheet = 2)
 symp[symp == "NA"] <- NA
 symp$n <- str_c("S", symp$n)
 
 #load nosology category df 
-nos_cat <- read_xlsx("symptoms.xlsx", sheet = 3)
+nos_cat <- read_xlsx("symptoms_and_items.xlsx", sheet = 3)
 
 #load symptom df with count per instrument of compound and specific symptom rep
-symp_n <- read_xlsx("symptoms.xlsx", sheet = 4)
+symp_n <- read_xlsx("symptoms_and_items.xlsx", sheet = 4)
 
 #load df with symptoms for jaccard index calc
-jac <- read_xlsx("symptoms.xlsx", sheet = 5)
+jac <- read_xlsx("symptoms_and_items.xlsx", sheet = 5)
 jac$n[1:9] <- str_c(0, jac$n[1:9])
 jac$n <- str_c("S", jac$n)
 jac <- jac[,1:6]
@@ -349,9 +349,9 @@ writeLines(items$CODE, "code.txt")
 
 ## 5. Load cosine scores from pre-trained models
 ```{r}
-cossco1 <- read.csv("cossco1.csv", row.names = 1)
-cossco2 <- read.csv("cossco2.csv", row.names = 1)
-cossco3 <- read.csv("cossco3.csv", row.names = 1)
+cossco1 <- read.csv("data/cossco1.csv", row.names = 1)
+cossco2 <- read.csv("data/cossco2.csv", row.names = 1)
+cossco3 <- read.csv("data/cossco3.csv", row.names = 1)
 ```
 
 ## 6. df with cosine scores between all pairs for the three models 
