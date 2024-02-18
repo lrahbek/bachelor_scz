@@ -163,9 +163,9 @@ jac_mat[jac_mat == 1] <- 0 # replace diagonal with 0
 dsm_5_m <- mean(jac_mat[2:4,1])
 icd_11_m <- mean(jac_mat[c(1,3,4),2])
 panss_m <- mean(jac_mat[c(1,2,4),3])
-sans_saps_m <- mean(jac_mat[c(1,3,3),4])
+sans_saps_m <- mean(jac_mat[1:3,4])
 
-tot_m <- mean(dsm_5_m, icd_11_m, panss_m, sans_saps_m) 
+tot_m <- sum(dsm_5_m, icd_11_m, panss_m, sans_saps_m)/4
 ```
 
 
